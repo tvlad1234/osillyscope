@@ -6,7 +6,7 @@ fw/*.hex
 fw/*.map
 fw/*.lst
 
-hw/osillyscope/*-backups/
-hw/osillyscope/fp-info-cache
-hw/osillyscope/*_prl
+hw/*/*-backups/
+hw/*/fp-info-cache
+hw/*/*_prl
 
