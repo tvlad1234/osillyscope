@@ -102,12 +102,13 @@ void scope_ui()
 
         if (!(BTN_L_GPIO->INDR & (1 << BTN_L_PIN)))
         {
-
+            /*
             if (!(BTN_R_GPIO->INDR & (1 << BTN_R_PIN))) // do DC offset calibration when L+R are pressed
             {
                 // capture a whole waveform buffer
                 if (dma_ready)
-                    run_dma();
+                    //run_dma();
+                    ;
                 while (!dma_ready)
                     ;
 
@@ -136,7 +137,8 @@ void scope_ui()
                     ;
                 ;
             }
-
+            */
+           
             switch (ui_selector)
             {
 

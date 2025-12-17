@@ -10,6 +10,7 @@ extern volatile uint16_t buffer2[BUFFER_LENGTH];
 
 // DMA ready (conversion done) flag
 extern volatile uint8_t dma_ready;
+extern volatile uint8_t dma_halves_filled;
 
 #define AN_IN_GPIO GPIOD
 #define AN_IN_PIN 5
@@ -61,7 +62,6 @@ extern uint8_t tdivSel;
 extern uint8_t runmode;
 
 void capture_waveform();
-void adc_set_div(uint8_t div);
 
 // Calculates frequency in captured buffer
 float measure_frequency(uint16_t *buffer, uint16_t trigger_level, float sample_period_us);

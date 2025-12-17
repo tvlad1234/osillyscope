@@ -1,24 +1,23 @@
 #include "ch32fun.h"
 #include "scope.h"
+#include "adc.h"
 
 // ADC capture buffers
-volatile uint16_t buffer1[BUFFER_LENGTH] = {0};
-volatile uint16_t buffer2[BUFFER_LENGTH] = {0};
+#define CIRC_BUF_LEN (2 * BUFFER_LENGTH)
+
+volatile uint16_t disp_buf[BUFFER_LENGTH] = {0};
+volatile uint16_t circ_buf[CIRC_BUF_LEN] = {0}; // circular
 
 // DMA ready (conversion done) flag
 volatile uint8_t dma_ready = 1;
-
-// available ADC clock dividers
-const uint8_t availableAdcDivs[] = {2, 2, 4, 6, 8, 12, 16, 24, 32, 64, 96, 128, 0};
+volatile uint8_t dma_halves_filled = 0;
 
 // pointers to the two buffers
-volatile uint16_t *writeBuffer = buffer1;
-volatile uint16_t *readBuffer = buffer2;
+volatile uint16_t *readBuffer = disp_buf;
 
 // trigger settings and flags
 volatile uint16_t trigLevel = 502;
 volatile uint8_t trig = RISING;
-volatile uint8_t awdg_trigged = 0;
 uint8_t scope_trigged;
 
 volatile int wf_cnt = 0;
@@ -27,239 +26,196 @@ float sampPer;
 float atten = 1.0f;
 float frontend_offset = 1.62f;
 
-uint8_t tdivSel = 0;
+uint8_t tdivSel = 1;
 
 // Sampling mode
 uint8_t runmode = RUN_AUTO;
 
-// initializes ADC and DMA at startup
-void init_adc()
+volatile uint8_t trig_sm = 0;
+
+enum
 {
-    // Start DMA clock
-    RCC->AHBPCENR |= RCC_AHBPeriph_DMA1;
+    NO_TRIGGER = 0,
+    TRIG_FIRST,
+    TRIG_SECOND,
+    POST_TRIG,
+    TRIG_DISABLED
+};
 
-    // Enable DMA IRQ
-    NVIC_EnableIRQ(DMA1_Channel1_IRQn);
+volatile uint8_t trig_state = NO_TRIGGER;
+volatile uint8_t trig_area = NO_TRIGGER;
 
-    // ADCCLK = 24 MHz => RCC_ADCPRE = 0: divide by 2
-    RCC->CFGR0 &= ~(0x1F << 11);
-
-    // Enable GPIOC and set C4 as analog input
-    RCC->APB2PCENR |= RCC_APB2Periph_GPIOC;
-    AN_IN_GPIO->CFGLR &= ~(0xf << (4 * AN_IN_PIN)); // CNF = 00: Analog, MODE = 00: Input
-
-    // Enable the ADC1 peripheral clock
-    RCC->APB2PCENR |= RCC_APB2Periph_ADC1;
-
-    // Reset the ADC to init all regs
-    RCC->APB2PRSTR |= RCC_APB2Periph_ADC1;
-    RCC->APB2PRSTR &= ~RCC_APB2Periph_ADC1;
-
-    // Set sequencer to channel 2 only
-    ADC1->RSQR3 = AN_IN_CH;
-
-    // Possible times: 0->3,1->9,2->15,3->30,4->43,5->57,6->73,7->241 cycles
-    ADC1->SAMPTR2 = 1 /*9 cycles*/ << (3 /*offset per channel*/ * AN_IN_CH /*channel*/);
-
-    // turn on ADC
-    ADC1->CTLR2 |= ADC_ADON;
-
-    // Reset calibration
-    ADC1->CTLR2 |= ADC_RSTCAL;
-    while (ADC1->CTLR2 & ADC_RSTCAL)
-        ;
-
-    // Calibrate
-    ADC1->CTLR2 |= ADC_CAL;
-    while (ADC1->CTLR2 & ADC_CAL)
-        ;
-
-    // enable analog watchdog for single regular channel and interrupt
-    ADC1->CTLR1 |= ADC_AWDSGL | ADC_AWDEN | ADC_AWDIE;
-
-    // set analog watchdog channel
-    ADC1->CTLR1 |= AN_IN_CH;
-
-    // Enable continuous conversion and DMA
-    ADC1->CTLR2 |= ADC_CONT | ADC_DMA | ADC_EXTSEL;
-
-    // clear analog watchdog flag
-    ADC1->STATR = ~ADC_FLAG_AWD;
-
-    // enable ADC interrupt
-    NVIC_EnableIRQ(ADC_IRQn);
-
-    // start conversion
-    ADC1->CTLR2 |= ADC_SWSTART;
-
-    adc_set_div(availableAdcDivs[tdivSel]);
-}
-
-// Interrupt handler for the DMA, fires at the end of each buffer capture
+// DMA interrupt handler
 void DMA1_Channel1_IRQHandler(void) __attribute__((interrupt));
 void DMA1_Channel1_IRQHandler()
 {
+    if (dma_halves_filled < 3)
+        dma_halves_filled++;
+
+    if (DMA1->INTFR & DMA1_FLAG_HT1)
+    {
+        if (trig_state == NO_TRIGGER && awdg_trigged)
+        {
+            trig_state = TRIG_FIRST;
+            trig_area = trig_state;
+            DMA1_Channel1->CFGR &= ~DMA_CFGR1_EN;
+            trig_state = POST_TRIG;
+            dma_ready = 1;
+        }
+        DMA1->INTFCR = DMA_HTIF1; // clear Half Transfer interrupt
+    }
+
     if (DMA1->INTFR & DMA1_FLAG_TC1)
     {
+        if (trig_state == NO_TRIGGER && awdg_trigged)
+        {
+            trig_state = TRIG_SECOND;
+            trig_area = trig_state;
+
+            DMA1_Channel1->CFGR &= ~DMA_CFGR1_EN;
+            trig_state = POST_TRIG;
+            dma_ready = 1;
+        }
+
+        else if (trig_state == TRIG_DISABLED)
+            dma_ready = 1;
+
         DMA1->INTFCR = DMA_CTCIF1; // clear Transfer Complete interrupt
-        wf_cnt++;
-        dma_ready = 1; // raise ready flag (conversion finished)
     }
 }
 
-volatile uint8_t trig_sm = 0;
-
-// Interrupt handler for the ADC analog watchdog, used for triggering
-void ADC1_IRQHandler(void) __attribute__((interrupt));
-void ADC1_IRQHandler()
+void start_circular_capture(uint16_t *buf, uint32_t cnt)
 {
-    if (ADC1->STATR & ADC_FLAG_AWD)
-    {
-        if (trig_sm == 0)
-        {
-            trig_sm = 1;
-
-            if (trig == FALLING)
-            {
-                ADC1->WDLTR = 0;
-                ADC1->WDHTR = trigLevel;
-            }
-            else
-            {
-                ADC1->WDLTR = trigLevel;
-                ADC1->WDHTR = 1023;
-            }
-            ADC1->STATR &= ~ADC_FLAG_AWD; // clear the watchdog flag
-        }
-        else if (trig_sm == 1)
-        {
-            ADC1->CTLR1 &= ~(ADC_AWDIE | ADC_AWDEN); // disable the watchdog and watchdog interrupt
-            awdg_trigged = 1;
-            trig_sm = 2;
-
-            // start capture
-            run_dma();
-        }
-    }
-}
-
-// arms the DMA to initiate waveform capture from ADC
-void run_dma()
-{
-    // Swap the buffer pointers around
+    dma_halves_filled = 0;
     dma_ready = 0;
-    void *p = readBuffer;
-    readBuffer = writeBuffer;
-    writeBuffer = p;
 
-    // Setup DMA Channel 1 (ADC triggered) as reading, 16-bit, linear buffer
+    // Setup DMA Channel 1 (ADC triggered) as reading, 16-bit, circular buffer
     DMA1_Channel1->CFGR =
-        DMA_DIR_PeripheralSRC | DMA_MemoryInc_Enable | DMA_PeripheralDataSize_HalfWord | DMA_MemoryDataSize_HalfWord;
+        DMA_DIR_PeripheralSRC | DMA_MemoryInc_Enable | DMA_PeripheralDataSize_HalfWord | DMA_MemoryDataSize_HalfWord | DMA_CFGR1_CIRC;
 
     // Number of samples to get before irq
-    DMA1_Channel1->CNTR = BUFFER_LENGTH;
+    DMA1_Channel1->CNTR = cnt;
 
     // Source
     DMA1_Channel1->PADDR = (uint32_t)&ADC1->RDATAR;
 
     // Destination
-    DMA1_Channel1->MADDR = (uint32_t)writeBuffer;
+    DMA1_Channel1->MADDR = (uint32_t)buf;
+
+    // Enable DMA channel
+    DMA1_Channel1->CFGR |= DMA_CFGR1_EN | DMA_CFGR1_HTIE | DMA_CFGR1_TCIE;
+}
+
+void start_linear_capture(uint16_t *buf, uint32_t cnt)
+{
+    dma_ready = 0;
+    // Setup DMA Channel 1 (ADC triggered) as reading, 16-bit, linear buffer
+    DMA1_Channel1->CFGR =
+        DMA_DIR_PeripheralSRC | DMA_MemoryInc_Enable | DMA_PeripheralDataSize_HalfWord | DMA_MemoryDataSize_HalfWord;
+
+    // Number of samples to get before irq
+    DMA1_Channel1->CNTR = cnt;
+
+    // Source
+    DMA1_Channel1->PADDR = (uint32_t)&ADC1->RDATAR;
+
+    // Destination
+    DMA1_Channel1->MADDR = (uint32_t)buf;
 
     // Enable DMA channel
     DMA1_Channel1->CFGR |= DMA_CFGR1_EN | DMA_IT_TC;
 }
 
-// Set the ADC clock divider
-void adc_set_div(uint8_t div)
+int find_trigger(uint16_t *buf, int len, uint16_t level, int rising)
 {
-    sampPer = 20.0f * (1 / 48.0f) * div;
+    for (int i = 1; i < len; i++)
+        if (!rising)
+        {
+            if (buf[i - 1] < level && buf[i] >= level)
+                return i;
+        }
+        else
+        {
+            if (buf[i - 1] > level && buf[i] <= level)
+                return i;
+        }
+    return -1;
+}
 
-    // hack to zoom in onto the waveform at the fastest sample rate (extend time base down to 5us/d)
-    if (tdivSel == 0)
-        sampPer = sampPer / 2;
-
-    RCC->CFGR0 &= ~((uint32_t)(0b11111) << 11);
-    switch (div)
+void merge_buffers()
+{
+    if (trig_area == TRIG_FIRST)
     {
-    case 2:
-        break;
-    case 4:
-        RCC->CFGR0 |= RCC_ADCPRE_DIV4;
-        break;
-    case 6:
-        RCC->CFGR0 |= RCC_ADCPRE_DIV6;
-        break;
-    case 8:
-        RCC->CFGR0 |= RCC_ADCPRE_DIV8;
-        break;
-    case 12:
-        RCC->CFGR0 |= 0xA000;
-        break;
-    case 16:
-        RCC->CFGR0 |= 0xE000;
-        break;
-    case 24:
-        RCC->CFGR0 |= 0xA800;
-        break;
-    case 32:
-        RCC->CFGR0 |= 0xE800;
-        break;
-    case 64:
-        RCC->CFGR0 |= 0xF000;
-        break;
-    case 96:
-        RCC->CFGR0 |= 0xB800;
-        break;
-    case 128:
-        RCC->CFGR0 |= 0xF800;
-        break;
-    default:
-        break;
+        scope_trigged = 1;
+
+        // find trigger point in first area
+        int trig_index = find_trigger(circ_buf, CIRC_BUF_LEN / 2, trigLevel, trig);
+
+        int idx = trig_index;
+        int wrap = 1;
+        for (int i = (BUFFER_LENGTH / 2) - 1; i >= 0; i--)
+            if (idx >= 0)
+                disp_buf[i] = circ_buf[idx--]; // fetch from first half
+            else
+                disp_buf[i] = circ_buf[CIRC_BUF_LEN - (wrap++)]; // then wraparound second half
+
+        idx = trig_index;
+        for (int i = BUFFER_LENGTH / 2; i < BUFFER_LENGTH && idx < CIRC_BUF_LEN / 2; i++)
+            disp_buf[i] = circ_buf[idx++];
+    }
+
+    else if (trig_area == TRIG_SECOND)
+    {
+        scope_trigged = 1;
+
+        // find trigger point in second area
+        int trig_index = find_trigger(circ_buf + (CIRC_BUF_LEN / 2), CIRC_BUF_LEN / 2, trigLevel, trig) + (CIRC_BUF_LEN / 2);
+
+        int idx = trig_index;
+        for (int i = (BUFFER_LENGTH / 2) - 1; i >= 0; i--)
+            disp_buf[i] = circ_buf[idx--];
+
+        idx = trig_index;
+        int wrap = 0;
+        for (int i = BUFFER_LENGTH / 2; i < BUFFER_LENGTH; i++)
+            if (idx < CIRC_BUF_LEN)
+                disp_buf[i] = circ_buf[idx++];
+            else
+                disp_buf[i] = circ_buf[wrap++];
+    }
+
+    else
+    {
+        if (runmode == RUN_AUTO)
+            for (int i = 0; i < BUFFER_LENGTH; i++)
+                disp_buf[i] = circ_buf[i];
+        scope_trigged = 0;
     }
 }
 
 // Capture one waveform
 void capture_waveform()
 {
+    static uint16_t prevMs;
+    uint16_t currentMs = SysTick->CNT / DELAY_MS_TIME;
+    if (currentMs < prevMs)
+        prevMs = currentMs;
+
+    if (runmode == RUN_AUTO && currentMs - prevMs > 150 && trig_state == NO_TRIGGER)
+    {
+        DMA1_Channel1->CFGR &= ~DMA_CFGR1_EN; // stop DMA
+        trig_state = TRIG_DISABLED;
+        start_linear_capture(circ_buf, BUFFER_LENGTH);
+        prevMs = currentMs;
+    }
+
     if (dma_ready)
     {
-        scope_trigged = 0;
-
-        static uint16_t prevMs;
-        uint16_t currentMs = SysTick->CNT / DELAY_MS_TIME;
-        if (currentMs < prevMs)
-            prevMs = currentMs;
-
-        if (runmode == RUN_AUTO && currentMs - prevMs > 150 && !awdg_trigged)
-        {
-            run_dma();
-            prevMs = currentMs;
-        }
-        else
-        {
-            if (awdg_trigged)
-                scope_trigged = 1; // mark triggered
-
-            // restart capture
-            // set thresholds for triggering
-            // FRONTEND INVERTS SIGNAL, TRIG SLOPES ARE OPPOSITE FROM USUAL
-            if (trig == FALLING)
-            {
-                // falling edge: arm when we're below the trigger level (outside of the set window)
-                ADC1->WDLTR = trigLevel;
-                ADC1->WDHTR = 1023;
-            }
-            else
-            {
-                // risaing edge: arm when we're above the trigger level (outside of the set window)
-                ADC1->WDLTR = 0;
-                ADC1->WDHTR = trigLevel;
-            }
-            trig_sm = 0;
-            awdg_trigged = 0;                     // clear trigger flag
-            ADC1->STATR = ~ADC_FLAG_AWD;          // clear analog watchdog flag
-            ADC1->CTLR1 |= ADC_AWDEN | ADC_AWDIE; // enable watchdog again, for next capture
-        }
+        merge_buffers();
+        trig_area = NO_TRIGGER;
+        trig_state = NO_TRIGGER;
+        start_circular_capture(circ_buf, CIRC_BUF_LEN);
+        adc_arm_trigger();
     }
 }
 
