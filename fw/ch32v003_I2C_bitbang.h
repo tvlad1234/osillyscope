@@ -1,7 +1,7 @@
 #ifndef CH32V003_I2C_BITBANG_H
 #define CH32V003_I2C_BITBANG_H
 
-#include "ch32v003fun.h"
+#include "ch32fun.h"
 #include <stdint.h>
 
 /*######## library usage and configuration

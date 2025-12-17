@@ -29,6 +29,6 @@ The analog frontend consists of a 2x attenuator, opamp buffer stage and DC offse
 The schematics are also provided as PDF, in [doc/schematic.pdf](doc/schematic.pdf).
 
 ## Code
-The firmware source code is provided in the [fw](fw) folder. It uses the [ch32v003fun](https://github.com/cnlohr/ch32v003fun/) framework. This repo must be cloned in the same folder as ch32v003fun repo.
+The firmware source code is provided in the [fw](fw) folder. It uses the [ch32fun](https://github.com/cnlohr/ch32fun/) framework.
 
 The ADC operates in continuous conversion mode and samples are copied into memory via DMA. Triggering is achieved using the analog watchdog feature of the ADC.

@@ -1,4 +1,4 @@
-#include "ch32v003fun.h"
+#include "ch32fun.h"
 #include "gfx.h"
 #include "ssd1306.h"
 #include "ui.h"
