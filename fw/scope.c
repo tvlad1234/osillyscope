@@ -129,11 +129,11 @@ void ADC1_IRQHandler()
                 ADC1->WDLTR = trigLevel;
                 ADC1->WDHTR = 1023;
             }
-            ADC1->STATR = ~ADC_FLAG_AWD; // clear the watchdog flag
+            ADC1->STATR &= ~ADC_FLAG_AWD; // clear the watchdog flag
         }
         else if (trig_sm == 1)
         {
-            ADC1->CTLR1 &= ~ADC_AWDIE & ~ADC_AWDEN; // disable the watchdog and watchdog interrupt
+            ADC1->CTLR1 &= ~(ADC_AWDIE | ADC_AWDEN); // disable the watchdog and watchdog interrupt
             awdg_trigged = 1;
             trig_sm = 2;
 
