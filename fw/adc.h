@@ -3,9 +3,11 @@
 
 #include "stdint.h"
 
+// available ADC clock dividers
+extern const uint8_t availableAdcDivs[];
 
 void adc_set_div(uint8_t div);
-void init_adc();
+void init_adc(oscilloscope_t *osc);
 void adc_arm_trigger();
 
 #endif

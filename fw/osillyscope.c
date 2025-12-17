@@ -8,6 +8,25 @@
 #include "scope.h"
 #include "ui.h"
 
+// ADC capture buffers
+volatile uint16_t wave_buf[DISP_BUF_LEN] = {0};
+volatile uint16_t adc_buf[CIRC_BUF_LEN] = {0}; // circular
+
+oscilloscope_t oscope = {
+	.wave_buf = wave_buf,
+	.adc_buf = adc_buf,
+
+	.dma_ready = 1,
+
+	.trig_level = 502,
+	.trig_state = NO_TRIGGER,
+
+	.tdiv_sel = 1,
+	.vdiv_sel = 2,
+
+	.runmode = RUN_AUTO,
+};
+
 int main()
 {
 	SystemInit();
@@ -16,19 +35,14 @@ int main()
 	// Let power supplies settle before initializing ADC and OLED
 	Delay_Ms(250);
 
-	// Initialize ADC and UI (button GPIO and screen)
-	init_adc();
-	init_ui();
-
-	// Splash screen
-	boot_splash();
+	init_oscilloscope(&oscope);
 
 	while (1)
 	{
 		// Waveform capture
-		capture_waveform();
+		capture_waveform(&oscope);
 
 		// User interface
-		scope_ui();
+		scope_ui(&oscope);
 	}
 }

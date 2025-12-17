@@ -5,11 +5,13 @@
 // available ADC clock dividers
 const uint8_t availableAdcDivs[] = {2, 2, 4, 6, 8, 12, 16, 24, 32, 64, 96, 128, 0};
 
-volatile uint8_t awdg_trigged = 0;
+static oscilloscope_t *osc;
 
 // initializes ADC and DMA at startup
-void init_adc()
+void init_adc(oscilloscope_t *oscope)
 {
+    osc = oscope;
+
     // Start DMA clock
     RCC->AHBPCENR |= RCC_AHBPeriph_DMA1;
 
@@ -67,17 +69,17 @@ void init_adc()
     // start conversion
     ADC1->CTLR2 |= ADC_SWSTART;
 
-    adc_set_div(availableAdcDivs[tdivSel]);
+    adc_set_div(availableAdcDivs[osc->tdiv_sel]);
 }
 
 // Set the ADC clock divider
 void adc_set_div(uint8_t div)
 {
-    sampPer = 20.0f * (1 / 48.0f) * div;
+    osc->samp_per = 20.0f * (1 / 48.0f) * div;
 
     // hack to zoom in onto the waveform at the fastest sample rate (extend time base down to 5us/d)
-    if (tdivSel == 0)
-        sampPer = sampPer / 2;
+    if (osc->tdiv_sel == 0)
+        osc->samp_per = osc->samp_per / 2;
 
     RCC->CFGR0 &= ~((uint32_t)(0b11111) << 11);
     switch (div)
@@ -119,23 +121,25 @@ void adc_set_div(uint8_t div)
     }
 }
 
+volatile uint8_t trig_sm = 0;
+
 void adc_arm_trigger()
 {
-    if (trig == FALLING)
+    if (osc->trig_slope == TRIG_FALLING)
     {
         // falling edge: arm when we're below the trigger level (outside of the set window)
-        ADC1->WDLTR = trigLevel;
+        ADC1->WDLTR = osc->trig_level;
         ADC1->WDHTR = 1023;
     }
     else
     {
         // rising edge: arm when we're above the trigger level (outside of the set window)
         ADC1->WDLTR = 0;
-        ADC1->WDHTR = trigLevel;
+        ADC1->WDHTR = osc->trig_level;
     }
 
     trig_sm = 0;
-    awdg_trigged = 0;                     // clear trigger flag
+    osc->awdg_trigged = 0;                // clear trigger flag
     ADC1->STATR = ~ADC_FLAG_AWD;          // clear analog watchdog flag
     ADC1->CTLR1 |= ADC_AWDEN | ADC_AWDIE; // enable watchdog again, for next capture
 }
@@ -146,20 +150,20 @@ void ADC1_IRQHandler()
 {
     if (ADC1->STATR & ADC_FLAG_AWD)
     {
-        if (dma_halves_filled >= 2)
+        if (osc->dma_halves_filled >= 2)
         {
             if (trig_sm == 0)
             {
                 trig_sm = 1;
 
-                if (trig == FALLING)
+                if (osc->trig_slope == TRIG_FALLING)
                 {
                     ADC1->WDLTR = 0;
-                    ADC1->WDHTR = trigLevel;
+                    ADC1->WDHTR = osc->trig_level;
                 }
                 else
                 {
-                    ADC1->WDLTR = trigLevel;
+                    ADC1->WDLTR = osc->trig_level;
                     ADC1->WDHTR = 1023;
                 }
             }
@@ -168,7 +172,7 @@ void ADC1_IRQHandler()
                 // TRIGGER EVENT!
                 // disable the watchdog and watchdog interrupt
                 ADC1->CTLR1 &= ~(ADC_AWDIE | ADC_AWDEN);
-                awdg_trigged = 1;
+                osc->awdg_trigged = 1;
                 trig_sm = 2;
             }
         }

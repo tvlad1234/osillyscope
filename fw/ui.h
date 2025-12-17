@@ -3,6 +3,7 @@
 
 #include "gfx.h"
 #include "ssd1306.h"
+#include "scope.h"
 
 enum
 {
@@ -26,11 +27,6 @@ enum
 extern ssd1306_oled myOled;
 extern gfx_inst myGfx;
 
-// available volts/division
-extern const float availableVoltDiv[];
-
-extern uint8_t ui_selector;
-extern uint8_t vdivSel;
 
 void init_ui();
 
@@ -43,8 +39,11 @@ void dotted_v_line(gfx_inst *gfx, int x, int y, int l);
 // Draws graticule, specified number of divisions and pixels/division
 void draw_graticule(gfx_inst *gfx, uint16_t divx, uint16_t divy, uint16_t pix);
 
+// Calculates frequency in captured buffer
+float measure_frequency(uint16_t *buffer, uint16_t trigger_level, float sample_period_us);
+
 // Oscilloscope UI
-void scope_ui();
+void scope_ui(oscilloscope_t *osc);
 
 void boot_splash();
 
