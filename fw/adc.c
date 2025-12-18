@@ -121,7 +121,14 @@ void adc_set_div(uint8_t div)
     }
 }
 
-volatile uint8_t trig_sm = 0;
+enum
+{
+    TRIG_AWDG_IDLE = 0,
+    TRIG_AWDG_ARMED,
+    TRIG_AWDG_HALF
+};
+
+volatile uint8_t trig_sm;
 
 void adc_arm_trigger()
 {
@@ -138,10 +145,25 @@ void adc_arm_trigger()
         ADC1->WDHTR = osc->trig_level;
     }
 
-    trig_sm = 0;
+    trig_sm = TRIG_AWDG_ARMED;
     osc->awdg_trigged = 0;                // clear trigger flag
     ADC1->STATR = ~ADC_FLAG_AWD;          // clear analog watchdog flag
     ADC1->CTLR1 |= ADC_AWDEN | ADC_AWDIE; // enable watchdog again, for next capture
+}
+
+void adc_update_trigger()
+{
+    if (trig_sm != TRIG_AWDG_IDLE) // if trigger is already armed
+    {
+        // stop
+        ADC1->CTLR1 &= ~(ADC_AWDIE | ADC_AWDEN); // disable the watchdog and watchdog interrupt
+        ADC1->STATR &= ~ADC_FLAG_AWD;            // clear the watchdog flag
+        osc->awdg_trigged = 0;
+        trig_sm = TRIG_AWDG_IDLE;
+
+        // and re-arm
+        adc_arm_trigger();
+    }
 }
 
 // Interrupt handler for the ADC analog watchdog, used for triggering
@@ -152,9 +174,9 @@ void ADC1_IRQHandler()
     {
         if (osc->dma_halves_filled >= 2)
         {
-            if (trig_sm == 0)
+            if (trig_sm == TRIG_AWDG_ARMED)
             {
-                trig_sm = 1;
+                trig_sm = TRIG_AWDG_HALF;
 
                 if (osc->trig_slope == TRIG_FALLING)
                 {
@@ -167,13 +189,13 @@ void ADC1_IRQHandler()
                     ADC1->WDHTR = 1023;
                 }
             }
-            else if (trig_sm == 1)
+            else if (trig_sm == TRIG_AWDG_HALF)
             {
                 // TRIGGER EVENT!
                 // disable the watchdog and watchdog interrupt
                 ADC1->CTLR1 &= ~(ADC_AWDIE | ADC_AWDEN);
                 osc->awdg_trigged = 1;
-                trig_sm = 2;
+                trig_sm = TRIG_AWDG_IDLE;
             }
         }
         ADC1->STATR &= ~ADC_FLAG_AWD; // clear the watchdog flag

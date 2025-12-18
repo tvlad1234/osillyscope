@@ -164,6 +164,7 @@ void scope_ui(oscilloscope_t *osc)
             case UI_TRIGLEV:
                 if (osc->trig_level > 10)
                     osc->trig_level -= 10;
+                adc_update_trigger();
                 break;
 
             case UI_TRIGSLOPE:
@@ -205,6 +206,7 @@ void scope_ui(oscilloscope_t *osc)
             case UI_TRIGLEV:
                 if (osc->trig_level < 1013)
                     osc->trig_level += 10;
+                adc_update_trigger();
                 break;
 
             case UI_TRIGSLOPE:
