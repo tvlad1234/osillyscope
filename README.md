@@ -31,4 +31,4 @@ The schematics are also provided as PDF, in [doc/schematic.pdf](doc/schematic.pd
 ## Code
 The firmware source code is provided in the [fw](fw) folder. It uses the [ch32fun](https://github.com/cnlohr/ch32fun/) framework.
 
-The ADC operates in continuous conversion mode and samples are copied into memory via DMA. Triggering is achieved using the analog watchdog feature of the ADC.
+The ADC operates in continuous conversion mode and samples are fetched into a circular buffer via DMA. Triggering is achieved using the analog watchdog feature of the ADC.
